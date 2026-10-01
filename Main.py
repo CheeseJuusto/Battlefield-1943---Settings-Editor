@@ -41,7 +41,7 @@ DEFAULT_SETTINGS = {
 # Pudotusvalikoiden vaihtoehdot (Teksti <-> Arvo tiedostossa)
 OPTIONS_MAP = {
     "Scheme1FlipY": {"Standard axis": "0", "Invert axis": "1"},
-    "Scheme3FlipY": {"Standard axis": "0", "Invert axis": "1"},
+    "Scheme3FlipY": {"Standard axis": "1", "Invert axis": "0"},
     "Scheme4FlipY": {"Standard axis": "0", "Invert axis": "1"},
     "Scheme1InputType": {
         "Normal": "0",
