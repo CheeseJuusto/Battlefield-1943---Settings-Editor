@@ -1,4 +1,4 @@
-# Battlefield 1943 Settings Editor
+# Battlefield 1943 Settings Editor v1.0
 
 A lightweight GUI tool written in Python/Tkinter for modifying profile setting values in **Battlefield 1943** PS3 save files (`USR-DATA`). The editor includes automatic custom MD5 checksum recalculation to ensure save files remain valid and accepted by the game or emulator (RPCS3).
 
