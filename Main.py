@@ -1,9 +1,9 @@
 import hashlib
 import os
+import re
 import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-
 
 def get_resource_path(relative_path):
     """Hakee absoluuttisen polun resurssiin (toimii sekä .py- koodina että PyInstaller .exe-tiedostona)."""
@@ -15,15 +15,68 @@ def get_resource_path(relative_path):
 
     return os.path.join(base_path, relative_path)
 
+# Standardiasetukset (Vakioarvot palautusta varten)
+DEFAULT_SETTINGS = {
+    # Controls
+    "Scheme1Sensitivity": "0.500000",
+    "Scheme1FlipY": "0",
+    "Scheme4FlipY": "0",
+    "Scheme3FlipY": "1",
+    "Scheme1InputType": "0",
+    "Scheme2InputType": "0",
+    "Scheme3InputType": "0",
+    "AimAssist": "1",
+    "Vibration": "2",
+    # Settings
+    "VOLanguage": "1",
+    "SoundSystemSize": "1",
+    "Volume": "1.000000",
+    "MusicVolume": "0.700000",
+    "DialogueVolume": "0.700000",
+    "Telemetry": "1",
+    "Brightness": "0.500000",
+    "CarRadio": "1",
+}
 
-class BF1943EditorApp:
+# Pudotusvalikoiden vaihtoehdot (Teksti <-> Arvo tiedostossa)
+OPTIONS_MAP = {
+    "Scheme1FlipY": {"Standard axis": "0", "Invert axis": "1"},
+    "Scheme3FlipY": {"Standard axis": "0", "Invert axis": "1"},
+    "Scheme4FlipY": {"Standard axis": "0", "Invert axis": "1"},
+    "Scheme1InputType": {
+        "Normal": "0",
+        "Southpaw": "1",
+        "Lefty": "2",
+        "Lefty Southpaw": "3",
+    },
+    "Scheme2InputType": {
+        "Normal": "0",
+        "Stickdrive": "1",
+        "Southpaw": "2",
+        "Southpaw Stickd.": "3",
+    },
+    "Scheme3InputType": {
+        "Normal": "0",
+        "Southpaw": "1",
+        "Lefty": "2",
+        "Lefty Southpaw": "3",
+    },
+    "AimAssist": {"No": "0", "Yes": "1"},
+    "Vibration": {"No": "0", "Low": "1", "High": "2"},
+    "VOLanguage": {"Localized": "0", "Original": "1"},
+    "SoundSystemSize": {"TV": "0", "HI-FI": "1", "Home Cinema": "2"},
+    "Telemetry": {"No": "0", "Yes": "1"},
+    "CarRadio": {"No": "0", "Yes": "1"},
+}
+
+
+class ConfigEditorApp:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("Battlefield 1943 - Settings Editor")
-        self.root.geometry("520x250")
-        self.root.minsize(450, 220)
-
+        self.root.title("Battlefield 1943 Settings Editor")
+        self.root.geometry("560x560")
+        
         # Ladataan ikonitiedosto PyInstaller-yhteensopivalla polulla
         try:
             icon_path = get_resource_path("app.ico")
@@ -32,304 +85,369 @@ class BF1943EditorApp:
             pass  # Jos kuvaketta ei löydy, sovellus jatkaa normaalisti
 
         self.file_path = None
-        self.file_bytes = bytearray()
+        self.file_bytes = b""
 
-        # Restricted search: Only Scheme1Sensitivity and AimAssist
-        # Scheme1Sensitivity maximum value increased to 9.999999
-        self.settings_schema = [
-            ("Scheme1Sensitivity", "float", 0.0, 9.999999),
-            ("AimAssist", "int", 0, 1),
-        ]
+        # UI muuttujat ja elementit
+        self.vars = {}
+        self.widgets = {}
+        self.sensitivity_unlocked = tk.BooleanVar(value=False)
 
-        self.widget_vars = {}
         self.setup_ui()
 
     def setup_ui(self):
-        top_frame = ttk.LabelFrame(self.root, text=" File ", padding=10)
-        top_frame.pack(side="top", fill="x", padx=10, pady=5)
+        # Yläpalkki tiedoston valinnalle
+        top_frame = ttk.Frame(self.root, padding=10)
+        top_frame.pack(fill="x")
+
+        btn_open = ttk.Button(
+            top_frame, text="Open file...", command=self.open_file
+        )
+        btn_open.pack(side="left", padx=5)
 
         self.lbl_file = ttk.Label(
-            top_frame, text="No file selected", foreground="gray"
+            top_frame, text="File not found", foreground="gray"
         )
-        self.lbl_file.pack(side="left", fill="x", expand=True)
+        self.lbl_file.pack(side="left", padx=10)
 
-        btn_browse = ttk.Button(
-            top_frame, text="Open File...", command=self.open_file
-        )
-        btn_browse.pack(side="right")
+        # Notebook välilehdet
+        notebook = ttk.Notebook(self.root)
+        notebook.pack(expand=True, fill="both", padx=10, pady=5)
 
-        bottom_frame = ttk.Frame(self.root, padding=10)
-        bottom_frame.pack(side="bottom", fill="x")
+        self.tab_controls = ttk.Frame(notebook)
+        self.tab_settings = ttk.Frame(notebook)
 
+        notebook.add(self.tab_controls, text="  Controls  ")
+        notebook.add(self.tab_settings, text="  Settings  ")
+
+        self.build_controls_tab()
+        self.build_settings_tab()
+
+        # Tallenna-painike alapalkkiin
         self.btn_save = ttk.Button(
-            bottom_frame,
-            text="Save Changes",
+            self.root,
+            text="Save file",
             command=self.save_file,
             state="disabled",
         )
-        self.btn_save.pack(side="right")
-
-        middle_frame = ttk.LabelFrame(self.root, text=" Settings ", padding=5)
-        middle_frame.pack(side="top", fill="both", expand=True, padx=10, pady=5)
-
-        self.canvas = tk.Canvas(middle_frame, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(
-            middle_frame, orient="vertical", command=self.canvas.yview
-        )
-
-        self.controls_frame = ttk.Frame(self.canvas)
-        self.controls_frame.bind(
-            "<Configure>",
-            lambda e: self.canvas.configure(
-                scrollregion=self.canvas.bbox("all")
-            ),
-        )
-
-        self.canvas.create_window((0, 0), window=self.controls_frame, anchor="nw")
-        self.canvas.configure(yscrollcommand=scrollbar.set)
-
-        self.canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        self.btn_save.pack(pady=10)
 
     def open_file(self):
         path = filedialog.askopenfilename(
-            title="Select Profile File",
-            filetypes=[
-                ("All Files", "*.*"),
-                ("USR-DATA", "USR-DATA*"),
-                ("Profile Files", "profsave*"),
-                ("DAT Files", "*.dat"),
-            ],
+            title="Select USR-DATA file",
+            filetypes=[("All files", "*.*"), ("USR-DATA", "USR-DATA*")],
         )
         if not path:
             return
 
         try:
             with open(path, "rb") as f:
-                self.file_bytes = bytearray(f.read())
-
+                self.file_bytes = f.read()
             self.file_path = path
             self.lbl_file.config(
                 text=os.path.basename(path), foreground="black"
             )
-            self.build_controls()
             self.btn_save.config(state="normal")
-            messagebox.showinfo("Success", "File loaded successfully!")
+            self.update_ui_from_file()
         except Exception as e:
             messagebox.showerror(
-                "Error", f"Failed to open file:\n{e}"
+                "Virhe", f"Tiedoston avaaminen epäonnistui:\n{e}"
             )
 
-    def get_setting_bounds(self, key_bytes):
-        pos = self.file_bytes.find(key_bytes)
-        if pos == -1:
-            return None, None, None
+    def get_value(self, key):
+        """Etsii avaimen arvon suoraan tiedostosta."""
+        if not self.file_bytes:
+            return DEFAULT_SETTINGS.get(key, "0")
 
-        start_search = pos + len(key_bytes)
+        key_b = key.encode("utf-8")
+        pos = self.file_bytes.find(key_b)
+        if pos != -1:
+            sub = self.file_bytes[pos + len(key_b) : pos + len(key_b) + 30]
+            match = re.search(rb"[0-9\.]+", sub)
+            if match:
+                return match.group(0).decode("utf-8")
+        return DEFAULT_SETTINGS.get(key, "0")
 
-        start_val = start_search
-        while start_val < len(self.file_bytes) and not (
-            48 <= self.file_bytes[start_val] <= 57
-            or self.file_bytes[start_val] == 45
-        ):
-            start_val += 1
+    def build_controls_tab(self):
+        frame = ttk.Frame(self.tab_controls, padding=10)
+        frame.pack(fill="both", expand=True)
 
-        if start_val >= len(self.file_bytes):
-            return None, None, None
+        controls_schema = [
+            ("Sensitivity", "Scheme1Sensitivity", "slider_sens", None),
+            ("Vertical Look", "Scheme1FlipY", "dropdown", None),
+            ("Vertical Vehicle", "Scheme4FlipY", "dropdown", None),
+            ("Vertical Fly", "Scheme3FlipY", "dropdown", None),
+            ("Soldier Controls", "Scheme1InputType", "dropdown", None),
+            ("Land/Boat Controls", "Scheme2InputType", "dropdown", None),
+            ("Plane Controls", "Scheme3InputType", "dropdown", None),
+            ("Aim Assist", "AimAssist", "dropdown", None),
+            ("Vibration", "Vibration", "dropdown", None),
+        ]
 
-        end_val = start_val
-        while end_val < len(self.file_bytes) and (
-            48 <= self.file_bytes[end_val] <= 57
-            or self.file_bytes[end_val] in (46, 45)
-        ):
-            end_val += 1
+        self.create_widgets(frame, controls_schema)
 
-        val_str = self.file_bytes[start_val:end_val].decode(
-            "ascii", errors="ignore"
+        btn_default = ttk.Button(
+            frame,
+            text="Default Controls",
+            command=lambda: self.reset_to_default(controls_schema),
         )
-        return start_val, end_val, val_str
+        btn_default.pack(pady=15, anchor="e")
 
-    def build_controls(self):
-        for child in self.controls_frame.winfo_children():
-            child.destroy()
-        self.widget_vars.clear()
+    def build_settings_tab(self):
+        frame = ttk.Frame(self.tab_settings, padding=10)
+        frame.pack(fill="both", expand=True)
 
-        row = 0
-        for key, stype, min_v, max_v in self.settings_schema:
-            key_bytes = key.encode("ascii")
-            start, end, val_str = self.get_setting_bounds(key_bytes)
+        settings_schema = [
+            ("Voiceover Language", "VOLanguage", "dropdown", None),
+            ("Your Sound System", "SoundSystemSize", "dropdown", None),
+            ("Master Volume", "Volume", "slider", 1.0),
+            ("Music Volume", "MusicVolume", "slider", 1.0),
+            ("Dialogue Volume", "DialogueVolume", "slider", 1.0),
+            ("Telemetry", "Telemetry", "dropdown", None),
+            ("Brightness", "Brightness", "slider", 1.0),
+            ("Car Radio", "CarRadio", "dropdown", None),
+        ]
 
-            if start is None:
-                continue
+        self.create_widgets(frame, settings_schema)
 
-            lbl = ttk.Label(
-                self.controls_frame, text=key, width=22, anchor="w"
-            )
-            lbl.grid(row=row, column=0, padx=5, pady=4, sticky="w")
+        btn_default = ttk.Button(
+            frame,
+            text="Default Settings",
+            command=lambda: self.reset_to_default(settings_schema),
+        )
+        btn_default.pack(pady=15, anchor="e")
 
-            if stype == "float":
-                try:
-                    init_val = float(val_str)
-                except ValueError:
-                    init_val = 0.0
+    def create_widgets(self, parent, schema):
+        for label_text, key, widget_type, max_val in schema:
+            row = ttk.Frame(parent)
+            row.pack(fill="x", pady=5)
 
-                var = tk.DoubleVar(value=init_val)
-                entry_var = tk.StringVar(value=val_str)
+            lbl = ttk.Label(row, text=label_text, width=20, anchor="w")
+            lbl.pack(side="left")
 
-                updating = False
+            val = float(DEFAULT_SETTINGS.get(key, "0"))
 
-                def on_scale_move(val, ev=entry_var, target_len=len(val_str)):
-                    nonlocal updating
-                    if not updating:
-                        updating = True
-                        dec_places = max(0, target_len - len(str(int(float(val)))) - 1)
-                        ev.set(f"{float(val):.{dec_places}f}")
-                        updating = False
-
-                def on_entry_change(*args, v=var, ev=entry_var):
-                    nonlocal updating
-                    if not updating:
-                        try:
-                            val = float(ev.get())
-                            updating = True
-                            v.set(val)
-                            updating = False
-                        except ValueError:
-                            pass
-
-                entry_var.trace_add("write", on_entry_change)
+            if widget_type == "slider_sens":
+                var = tk.DoubleVar(value=val)
+                self.vars[key] = var
 
                 scale = ttk.Scale(
-                    self.controls_frame,
-                    from_=min_v,
-                    to=max_v,
+                    row, from_=0.0, to=1.0, variable=var, orient="horizontal"
+                )
+                scale.pack(side="left", fill="x", expand=True, padx=5)
+
+                val_lbl = ttk.Label(row, text=f"{val:.2f}", width=5)
+                val_lbl.pack(side="right")
+
+                chk = ttk.Checkbutton(
+                    row,
+                    text="Unlock",
+                    variable=self.sensitivity_unlocked,
+                    command=self.toggle_sensitivity_unlock,
+                )
+                chk.pack(side="right", padx=5)
+
+                # Riippuvuudet tallennetaan päivityksiä varten
+                self.widgets[key] = {
+                    "scale": scale,
+                    "label": val_lbl,
+                    "type": "slider_sens",
+                }
+                var.trace_add(
+                    "write",
+                    lambda *args, v=var, l=val_lbl: self.on_sensitivity_change(
+                        v, l
+                    ),
+                )
+
+            elif widget_type == "slider":
+                var = tk.DoubleVar(value=val)
+                self.vars[key] = var
+
+                max_limit = max_val if max_val is not None else 1.0
+                scale = ttk.Scale(
+                    row,
+                    from_=0.0,
+                    to=max_limit,
                     variable=var,
                     orient="horizontal",
-                    length=160,
-                    command=on_scale_move,
                 )
-                scale.grid(row=row, column=1, padx=5, pady=4)
+                scale.pack(side="left", fill="x", expand=True, padx=5)
 
-                entry = ttk.Entry(
-                    self.controls_frame, textvariable=entry_var, width=12
+                val_lbl = ttk.Label(row, text=f"{val:.2f}", width=5)
+                val_lbl.pack(side="right")
+
+                self.widgets[key] = {
+                    "scale": scale,
+                    "label": val_lbl,
+                    "type": "slider",
+                }
+                var.trace_add(
+                    "write",
+                    lambda *args, v=var, l=val_lbl: l.config(
+                        text=f"{v.get():.2f}"
+                    ),
                 )
-                entry.grid(row=row, column=2, padx=5, pady=4)
 
-                self.widget_vars[key] = (entry_var, "float")
+            elif widget_type == "dropdown":
+                options = OPTIONS_MAP[key]
+                current_text = list(options.keys())[0]
 
-            elif stype == "int":
-                try:
-                    init_val = int(val_str)
-                except ValueError:
-                    init_val = 0
+                var = tk.StringVar(value=current_text)
+                self.vars[key] = var
 
-                var = tk.IntVar(value=init_val)
+                dropdown = ttk.OptionMenu(
+                    row, var, current_text, *options.keys()
+                )
+                dropdown.pack(side="right", fill="x", expand=True)
 
-                if min_v == 0 and max_v == 1:
-                    chk = ttk.Checkbutton(self.controls_frame, variable=var)
-                    chk.grid(
-                        row=row,
-                        column=1,
-                        columnspan=2,
-                        sticky="w",
-                        padx=5,
-                        pady=4,
-                    )
+                self.widgets[key] = {"dropdown": dropdown, "type": "dropdown"}
+
+    def toggle_sensitivity_unlock(self):
+        """Käsitellään Unlock-täppä. Jos se poistetaan, asteikko palaa 0-1 välille liikutettaessa."""
+        scale = self.widgets["Scheme1Sensitivity"]["scale"]
+        if self.sensitivity_unlocked.get():
+            scale.config(to=9.999999)
+        else:
+            # Jos arvo on jo alle 1.0, asetetaan asteikon maksimiksi heti 1.0
+            if self.vars["Scheme1Sensitivity"].get() <= 1.0:
+                scale.config(to=1.0)
+
+    def on_sensitivity_change(self, var, label):
+        scale = self.widgets["Scheme1Sensitivity"]["scale"]
+        # Jos unlock ei ole päällä, mutta asteikkoa liikutetaan, pakotetaan maksimi 1.0:aan
+        if not self.sensitivity_unlocked.get():
+            scale.config(to=1.0)
+
+        label.config(text=f"{var.get():.2f}")
+
+    def update_ui_from_file(self):
+        """Päivittää käyttöliittymän arvot ladatun tiedoston mukaisesti."""
+        for key in self.vars:
+            val_str = self.get_value(key)
+            val_num = float(val_str)
+
+            if key == "Scheme1Sensitivity":
+                # Tarkistetaan ylittääkö arvo 1.0 -> Aktivoidaan unlock automaattisesti
+                if val_num > 1.0:
+                    self.sensitivity_unlocked.set(True)
+                    self.widgets[key]["scale"].config(to=9.999999)
                 else:
-                    spin = ttk.Spinbox(
-                        self.controls_frame,
-                        from_=min_v,
-                        to=max_v,
-                        textvariable=var,
-                        width=5,
+                    self.sensitivity_unlocked.set(False)
+                    self.widgets[key]["scale"].config(to=1.0)
+
+                self.vars[key].set(val_num)
+
+            elif self.widgets[key]["type"] in ["slider"]:
+                self.vars[key].set(val_num)
+
+            elif self.widgets[key]["type"] == "dropdown":
+                options = OPTIONS_MAP[key]
+                val_int_str = str(int(val_num))
+                current_text = next(
+                    (k for k, v in options.items() if v == val_int_str),
+                    list(options.keys())[0],
+                )
+                self.vars[key].set(current_text)
+
+    def reset_to_default(self, schema):
+        """Palauttaa tietyn välilehden asetukset vakioarvoihin."""
+        for _, key, widget_type, _ in schema:
+            if key in DEFAULT_SETTINGS:
+                def_val = DEFAULT_SETTINGS[key]
+                if widget_type in ["slider", "slider_sens"]:
+                    self.vars[key].set(float(def_val))
+                    if key == "Scheme1Sensitivity":
+                        self.sensitivity_unlocked.set(False)
+                        self.widgets[key]["scale"].config(to=1.0)
+                elif widget_type == "dropdown":
+                    options = OPTIONS_MAP[key]
+                    text = next(
+                        (k for k, v in options.items() if v == def_val), ""
                     )
-                    spin.grid(row=row, column=1, sticky="w", padx=5, pady=4)
-
-                self.widget_vars[key] = (var, "int")
-
-            row += 1
+                    self.vars[key].set(text)
 
     def calculate_custom_md5(self, data):
-        """Calculates Custom MD5 checksum according to .savepatch rules."""
+        """Laskee BF1943 Custom MD5 -tarkistussumman peliä varten."""
         payload = bytes(data[0x000010:])
         raw_md5 = bytearray(hashlib.md5(payload).digest())
 
         fhash = bytearray(16)
 
-        # Reverse bytes 0..3 (0x0000..0x0003)
+        # Tavut 0..3 käänteiseen järjestykseen
         fhash[0] = raw_md5[3]
         fhash[1] = raw_md5[2]
         fhash[2] = raw_md5[1]
         fhash[3] = raw_md5[0]
 
-        # Swap byte pairs 4..7 (0x0004..0x0007)
+        # Tavuparit 4..7 vaihdetaan keskenään (5,4,7,6)
         fhash[4] = raw_md5[5]
         fhash[5] = raw_md5[4]
         fhash[6] = raw_md5[7]
         fhash[7] = raw_md5[6]
 
-        # Keep bytes 8..15 as is (0x0008..0x000F)
+        # Tavut 8..15 pidetään sellaisenaan
         fhash[8:16] = raw_md5[8:16]
 
         return fhash
 
     def save_file(self):
+        """Kirjoittaa muutetut arvot tiedostoon ja päivittää Custom MD5 otsakkeeseen."""
         if not self.file_path or not self.file_bytes:
+            messagebox.showerror("Virhe", "Ei ladattua tiedostoa!")
             return
 
-        HEADER_SIZE = 16
+        data = bytearray(self.file_bytes)
 
-        # 1. Update changed values in memory while preserving exact length
-        for key, (var, stype) in self.widget_vars.items():
-            key_bytes = key.encode("ascii")
-            start, end, orig_val_str = self.get_setting_bounds(key_bytes)
+        # 1. Päivitetään muuttuneet arvot
+        for key, var in self.vars.items():
+            key_b = key.encode("utf-8")
+            pos = data.find(key_b)
 
-            if start is None:
-                continue
+            if pos != -1:
+                sub_start = pos + len(key_b)
+                sub = data[sub_start : sub_start + 30]
+                match = re.search(rb"[0-9\.]+", sub)
 
-            target_len = end - start
+                if match:
+                    val_start = sub_start + match.start()
+                    val_end = sub_start + match.end()
 
-            if stype == "float":
-                try:
-                    val_float = float(var.get())
-                    dec_places = max(0, target_len - len(str(int(val_float))) - 1)
-                    val_str = f"{val_float:.{dec_places}f}"
-                except ValueError:
-                    val_str = orig_val_str
-            else:
-                val_str = str(var.get())
+                    if key in OPTIONS_MAP:
+                        raw_val = OPTIONS_MAP[key][var.get()]
+                    else:
+                        raw_val = f"{var.get():.6f}"
 
-            new_bytes = val_str.encode("ascii")
+                    target_len = val_end - val_start
+                    new_bytes = raw_val.encode("utf-8")
 
-            if len(new_bytes) < target_len:
-                new_bytes = (
-                    new_bytes.rjust(target_len, b"0")
-                    if stype == "float"
-                    else new_bytes.ljust(target_len, b" ")
-                )
-            elif len(new_bytes) > target_len:
-                new_bytes = new_bytes[:target_len]
+                    if len(new_bytes) < target_len:
+                        new_bytes = new_bytes.ljust(target_len, b"0")
+                    elif len(new_bytes) > target_len:
+                        new_bytes = new_bytes[:target_len]
 
-            self.file_bytes[start : start + target_len] = new_bytes
+                    data[val_start:val_end] = new_bytes
 
-        # 2. Calculate new custom MD5 checksum
-        if len(self.file_bytes) > HEADER_SIZE:
-            custom_hash = self.calculate_custom_md5(self.file_bytes)
-            self.file_bytes[0:HEADER_SIZE] = custom_hash
+        # 2. Lasketaan uusi Custom MD5 ja kirjoitetaan otsakkeeseen (0x00..0x0F)
+        if len(data) > 16:
+            custom_hash = self.calculate_custom_md5(data)
+            data[0:16] = custom_hash
 
-        # 3. Save to file
+        # 3. Tallennetaan tiedosto levylle
         try:
             with open(self.file_path, "wb") as f:
-                f.write(self.file_bytes)
+                f.write(data)
             messagebox.showinfo(
-                "Success",
-                "File and Custom MD5 checksum saved successfully!",
+                "Saving successful",
+                "Restart the game to apply changes!",
             )
+            self.file_bytes = bytes(data)
         except Exception as e:
-            messagebox.showerror("Error", f"Save failed:\n{e}")
+            messagebox.showerror(
+                "Virhe", f"Tiedoston tallennus epäonnistui:\n{e}"
+            )
 
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = BF1943EditorApp(root)
+    app = ConfigEditorApp(root)
     root.mainloop()
